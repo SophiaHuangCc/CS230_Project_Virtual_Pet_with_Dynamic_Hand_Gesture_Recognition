@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader, Subset, random_split
 from tqdm import tqdm
 from torchvision.models.video import r3d_18, r2plus1d_18
 from torchvision.models.video import R3D_18_Weights, R2Plus1D_18_Weights
-
+import torch.nn.functional as F
 
 # ---- import your dataset class ----
 from dataset_hgd_preproc import HGDClips
@@ -66,6 +66,11 @@ class Tiny3DCNN(nn.Module):
         x = self.head(x)
         return x
     
+
+# ------------------------------
+# Transfer Learning with r3d_18
+# ------------------------------
+    
 def TransferModel_1(arch, num_classes, pretrained=False, dropout=0.5):
     if arch == "r3d_18":
         weights = R3D_18_Weights.KINETICS400_V1 if pretrained else None
@@ -80,9 +85,153 @@ def TransferModel_1(arch, num_classes, pretrained=False, dropout=0.5):
     in_features = model.fc.in_features
     model.fc = nn.Sequential(
         nn.Dropout(p=dropout),
-        nn.Linear(in_features, num_classes)
+        nn.Linear(in_features, num_classes),
     )
     return model, weights
+
+def set_trainable(module, trainable: bool, freeze_bn_affine: bool = True):
+    module.train(trainable)
+    for m in module.modules():
+        if isinstance(m, torch.nn.modules.batchnorm._BatchNorm):
+            # keep BN in eval when "frozen"
+            m.eval()
+            if freeze_bn_affine:
+                if m.weight is not None: m.weight.requires_grad = False
+                if m.bias is not None:   m.bias.requires_grad = False
+        for p in m.parameters(recurse=False):
+            p.requires_grad = trainable
+
+def freeze_until(model, stage: str = "layer3", freeze_bn_affine: bool = True):
+    # stage ∈ {"stem","layer1","layer2","layer3","none"} meaning:
+    # freeze everything up to and including that stage
+    # torchvision video resnets expose: model.stem, model.layer1..layer4, model.fc
+    order = ["stem", "layer1", "layer2", "layer3", "layer4"]
+    if stage not in {"stem","layer1","layer2","layer3","none"}:
+        raise ValueError("stage must be one of: stem, layer1, layer2, layer3, none")
+    stop_idx = {"stem":0, "layer1":1, "layer2":2, "layer3":3, "none":-1}[stage]
+    for i, name in enumerate(order):
+        mod = getattr(model, name)
+        set_trainable(mod, trainable=(i > stop_idx), freeze_bn_affine=freeze_bn_affine)
+    # classifier head always trainable
+    set_trainable(model.fc, trainable=True, freeze_bn_affine=False)
+
+def make_optimizer(model, base_lr=3e-4, weight_decay=1e-3, unfreeze_last=False):
+    params = []
+    # head
+    params.append({"params": model.fc.parameters(), "lr": base_lr})
+    if unfreeze_last:
+        params.append({"params": getattr(model, "layer4").parameters(), "lr": base_lr * 0.1})
+    return torch.optim.AdamW(params, weight_decay=weight_decay)
+
+# ------------------------------
+# 3DResNet
+# ------------------------------
+def conv3x3x3(in_ch, out_ch, stride=(1,1,1), groups=1, dilation=1):
+    return nn.Conv3d(in_ch, out_ch, kernel_size=3, stride=stride, padding=1, bias=False, groups=groups, dilation=dilation)
+
+def conv1x3x3(in_ch, out_ch, stride=(1,1,1)):
+    return nn.Conv3d(in_ch, out_ch, kernel_size=(1,3,3), stride=stride, padding=(0,1,1), bias=False)
+
+def conv3x1x1(in_ch, out_ch, stride=(1,1,1)):
+    return nn.Conv3d(in_ch, out_ch, kernel_size=(3,1,1), stride=stride, padding=(1,0,0), bias=False)
+
+class BasicBlock3D(nn.Module):
+    expansion = 1
+    def __init__(self, in_ch, out_ch, stride=(1,1,1), downsample=None):
+        super().__init__()
+        self.conv1 = conv3x3x3(in_ch, out_ch, stride)
+        self.bn1 = nn.BatchNorm3d(out_ch)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = conv3x3x3(out_ch, out_ch)
+        self.bn2 = nn.BatchNorm3d(out_ch)
+        self.downsample = downsample
+    def forward(self, x):
+        id = x
+        out = self.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        if self.downsample is not None:
+            id = self.downsample(x)
+        out = self.relu(out + id)
+        return out
+
+class BasicBlock2p1D(nn.Module):
+    expansion = 1
+    def __init__(self, in_ch, out_ch, stride=(1,1,1), downsample=None):
+        super().__init__()
+        s_t, s_h, s_w = stride
+        self.conv_t = conv3x1x1(in_ch, out_ch, (s_t,1,1))
+        self.bn_t = nn.BatchNorm3d(out_ch)
+        self.conv_sp = conv1x3x3(out_ch, out_ch, (1,s_h,s_w))
+        self.bn_sp = nn.BatchNorm3d(out_ch)
+        self.relu = nn.ReLU(inplace=True)
+        self.downsample = downsample
+    def forward(self, x):
+        id = x
+        out = self.relu(self.bn_t(self.conv_t(x)))
+        out = self.bn_sp(self.conv_sp(out))
+        if self.downsample is not None:
+            id = self.downsample(x)
+        out = self.relu(out + id)
+        return out
+
+class Stem(nn.Module):
+    def __init__(self, in_ch=3, out_ch=64):
+        super().__init__()
+        self.conv = nn.Conv3d(in_ch, out_ch, kernel_size=(3,7,7), stride=(1,2,2), padding=(1,3,3), bias=False)
+        self.bn = nn.BatchNorm3d(out_ch)
+        self.relu = nn.ReLU(inplace=True)
+        self.pool = nn.MaxPool3d(kernel_size=(1,3,3), stride=(1,2,2), padding=(0,1,1))
+    def forward(self, x):
+        x = self.relu(self.bn(self.conv(x)))
+        x = self.pool(x)
+        return x
+
+def make_stage(block_cls, in_ch, out_ch, blocks, stride_t=1, stride_sp=2):
+    layers = []
+    stride = (stride_t, stride_sp, stride_sp)
+    downsample = None
+    if stride != (1,1,1) or in_ch != out_ch * block_cls.expansion:
+        downsample = nn.Sequential(
+            nn.Conv3d(in_ch, out_ch * block_cls.expansion, kernel_size=1, stride=stride, bias=False),
+            nn.BatchNorm3d(out_ch * block_cls.expansion),
+        )
+    layers.append(block_cls(in_ch, out_ch, stride=stride, downsample=downsample))
+    in_ch = out_ch * block_cls.expansion
+    for _ in range(1, blocks):
+        layers.append(block_cls(in_ch, out_ch))
+    return nn.Sequential(*layers), in_ch
+
+class ResNet3D(nn.Module):
+    def __init__(self, block="r3d", layers=(2,2,2,2), num_classes=27, in_ch=3, width=64, dropout=0.5):
+        super().__init__()
+        block_cls = BasicBlock3D if block=="r3d" else BasicBlock2p1D
+        self.stem = Stem(in_ch, width)
+        c = width
+        self.layer1, c = make_stage(block_cls, c, width,   layers[0], stride_t=1, stride_sp=1)
+        self.layer2, c = make_stage(block_cls, c, width*2, layers[1], stride_t=2, stride_sp=2)
+        self.layer3, c = make_stage(block_cls, c, width*4, layers[2], stride_t=2, stride_sp=2)
+        self.layer4, c = make_stage(block_cls, c, width*8, layers[3], stride_t=2, stride_sp=2)
+        self.pool = nn.AdaptiveAvgPool3d(1)
+        self.drop = nn.Dropout(dropout)
+        self.fc = nn.Linear(c, num_classes)
+        self._init()
+    def _init(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv3d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+            if isinstance(m, nn.BatchNorm3d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+    def forward(self, x):
+        x = self.stem(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = self.pool(x).flatten(1)
+        x = self.drop(x)
+        x = self.fc(x)
+        return x
 
 
 # ------------------------------
@@ -179,6 +328,14 @@ def main():
     parser.add_argument("--freeze_backbone", action="store_true")
     parser.add_argument("--dropout", type=float, default=0.5)
 
+    parser.add_argument("--freeze_until", type=str, default="layer3",
+                    choices=["none","stem","layer1","layer2","layer3"],
+                    help="Freeze backbone up to and including this stage")
+    parser.add_argument("--freeze_bn_affine", action="store_true",
+                        help="Also freeze BN gamma/beta in frozen blocks")
+    parser.add_argument("--unfreeze_last", action="store_true",
+                        help="Also fine-tune layer4 with a smaller LR")
+
 
     args = parser.parse_args()
 
@@ -214,8 +371,16 @@ def main():
     )
 
     # Model / loss / opt
-    model, weights = TransferModel_1(args.arch, args.num_classes, args.pretrained, args.dropout)
-    model = model.to(device)
+    # Tiny3DCNN
+    # model = model = Tiny3DCNN(num_classes=27).to(device)
+    # Transfer Learning
+    # model, weights = TransferModel_1(args.arch, args.num_classes, args.pretrained, args.dropout)
+    # # Freeze more (strongest freeze)
+    # freeze_until(model, stage="layer3")  # freezes stem, layer1, layer2, layer3
+    # optimizer = make_optimizer(model, base_lr=args.lr, weight_decay=args.weight_decay, unfreeze_last=False)
+    # model = model.to(device)
+    # Baseline ResNet
+    model = ResNet3D(block="r3d", layers=(2,2,2,2), num_classes=27).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
