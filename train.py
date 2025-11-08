@@ -20,6 +20,9 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Subset, random_split
 from tqdm import tqdm
+from torchvision.models.video import r3d_18, r2plus1d_18
+from torchvision.models.video import R3D_18_Weights, R2Plus1D_18_Weights
+
 
 # ---- import your dataset class ----
 from dataset_hgd_preproc import HGDClips
@@ -62,6 +65,24 @@ class Tiny3DCNN(nn.Module):
         x = self.features(x)
         x = self.head(x)
         return x
+    
+def TransferModel_1(arch, num_classes, pretrained=False, dropout=0.5):
+    if arch == "r3d_18":
+        weights = R3D_18_Weights.KINETICS400_V1 if pretrained else None
+        model = r3d_18(weights=weights)
+    elif arch == "r2plus1d_18":
+        weights = R2Plus1D_18_Weights.KINETICS400_V1 if pretrained else None
+        model = r2plus1d_18(weights=weights)
+    else:
+        raise ValueError("Use --arch i3d only with PyTorchVideo (see below).")
+
+    # Replace final classifier
+    in_features = model.fc.in_features
+    model.fc = nn.Sequential(
+        nn.Dropout(p=dropout),
+        nn.Linear(in_features, num_classes)
+    )
+    return model, weights
 
 
 # ------------------------------
@@ -144,6 +165,21 @@ def main():
     parser.add_argument("--num_workers", type=int, default=0, help="macOS often happier with 0.")
     parser.add_argument("--force_cpu", action="store_true", help="Force CPU even if MPS is available.")
     parser.add_argument("--save_path", type=str, default="best.pt")
+    # add to argparse
+    parser.add_argument("--flip_prob", type=float, default=0.5)
+    parser.add_argument("--temporal_jitter", type=int, default=2)
+    parser.add_argument("--brightness", type=float, default=0.2)  # ±20%
+    parser.add_argument("--arch", type=str, default="r3d_18",
+                    choices=["r3d_18", "r2plus1d_18", "i3d"],
+                    help="Backbone architecture")
+    
+    parser.add_argument("--pretrained", action="store_true",
+                        help="Use pretrained Kinetics-400 weights when available")
+    parser.add_argument("--num_classes", type=int, default=27)
+    parser.add_argument("--freeze_backbone", action="store_true")
+    parser.add_argument("--dropout", type=float, default=0.5)
+
+
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -178,7 +214,8 @@ def main():
     )
 
     # Model / loss / opt
-    model = Tiny3DCNN(num_classes=27).to(device)
+    model, weights = TransferModel_1(args.arch, args.num_classes, args.pretrained, args.dropout)
+    model = model.to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
