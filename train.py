@@ -24,6 +24,13 @@ from torchvision.models.video import r3d_18, r2plus1d_18
 from torchvision.models.video import R3D_18_Weights, R2Plus1D_18_Weights
 import torch.nn.functional as F
 
+import json
+import numpy as np
+import datetime as _dt
+from collections import defaultdict
+import matplotlib.pyplot as plt
+import torchvision.utils as vutils
+
 # ---- import your dataset class ----
 from dataset_hgd_preproc import HGDClips
 
@@ -296,6 +303,128 @@ def run_one_epoch(model, loader, criterion, optimizer, device, train=True):
     avg_acc = total_correct / max(1, total_count)
     return avg_loss, avg_acc
 
+# ------------------------------
+# Evaluation metrics
+# ------------------------------
+def _next_run_dir(base="runs/train"):
+    base = Path(base)
+    base.mkdir(parents=True, exist_ok=True)
+    # exp, exp2, exp3…
+    existing = [p for p in base.iterdir() if p.is_dir() and p.name.startswith("exp")]
+    if not existing:
+        return base / "exp"
+    nums = [int(p.name[3:]) for p in existing if p.name[3:].isdigit()]
+    n = (max(nums) + 1) if nums else 2
+    return base / f"exp{n}"
+
+@torch.no_grad()
+def _collect_logits_labels(model, loader, device):
+    model.eval()
+    all_logits, all_labels, sample_clips = [], [], []
+    for clips, labels in loader:
+        clips = clips.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
+        logits = model(clips)
+        all_logits.append(logits.detach().cpu())
+        all_labels.append(labels.detach().cpu())
+        # keep a few clips for qualitative export
+        sample_clips.append(clips.detach().cpu())
+    return torch.cat(all_logits), torch.cat(all_labels), torch.cat(sample_clips)
+
+def _confmat(num_classes, preds, labels):
+    cm = torch.zeros((num_classes, num_classes), dtype=torch.long)
+    for p, t in zip(preds.view(-1), labels.view(-1)):
+        cm[t, p] += 1
+    return cm
+
+def _metrics_from_confmat(cm):
+    # cm[i, j] = count of true=i, pred=j
+    tp = torch.diag(cm).float()
+    fp = cm.sum(0).float() - tp
+    fn = cm.sum(1).float() - tp
+    tn = cm.sum().float() - (tp + fp + fn)
+    eps = 1e-9
+
+    precision = (tp / (tp + fp + eps)).numpy()
+    recall    = (tp / (tp + fn + eps)).numpy()
+    f1        = (2 * precision * recall / (precision + recall + eps))
+    iou       = (tp / (tp + fp + fn + eps)).numpy()
+
+    macro = {
+        "precision_macro": float(np.nanmean(precision)),
+        "recall_macro":    float(np.nanmean(recall)),
+        "f1_macro":        float(np.nanmean(f1)),
+        "iou_macro":       float(np.nanmean(iou)),
+    }
+    micro_acc = float(tp.sum().item() / max(1, cm.sum().item()))
+    return precision, recall, f1, iou, macro, micro_acc
+
+def _plot_confmat(cm, class_names, out_png):
+    cm_np = cm.numpy()
+    fig, ax = plt.subplots(figsize=(8, 8))
+    im = ax.imshow(cm_np, interpolation='nearest', cmap=plt.cm.Blues)
+    ax.figure.colorbar(im, ax=ax)
+    ax.set(
+        xticks=np.arange(len(class_names)),
+        yticks=np.arange(len(class_names)),
+        xticklabels=class_names, yticklabels=class_names,
+        ylabel='True label', xlabel='Predicted label', title='Confusion Matrix'
+    )
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+    thresh = cm_np.max() / 2.0 if cm_np.size else 0
+    for i in range(len(class_names)):
+        for j in range(len(class_names)):
+            ax.text(j, i, int(cm_np[i, j]),
+                    ha="center", va="center",
+                    color="white" if cm_np[i, j] > thresh else "black")
+    fig.tight_layout()
+    fig.savefig(out_png, bbox_inches='tight')
+    plt.close(fig)
+
+def _clip_contact_sheet(clip_CT_HW, n=8):  # clip is (C,T,H,W)
+    C,T,H,W = clip_CT_HW.shape
+    step = max(1, T//n)
+    frames = [clip_CT_HW[:, t, :, :] for t in range(0, T, step)][:n]  # list of (C,H,W)
+    grid = vutils.make_grid(frames, nrow=len(frames))  # (C, H, n*W)
+    return grid  # tensor [0..1] if inputs were normalized differently you may want to denorm
+
+@torch.no_grad()
+def evaluate_full(model, loader, criterion, device, num_classes, class_names, save_dir, epoch, max_bad=12):
+    save_dir = Path(save_dir); save_dir.mkdir(parents=True, exist_ok=True)
+    logits, labels, clips = _collect_logits_labels(model, loader, device)
+    loss = criterion(logits, labels).item()
+
+    preds = logits.argmax(1)
+    cm = _confmat(num_classes, preds, labels)
+    prec, rec, f1, iou, macro, acc = _metrics_from_confmat(cm)
+
+    # Save metrics
+    metrics = {
+        "epoch": epoch,
+        "loss": loss,
+        "accuracy": acc,
+        **macro,
+        "per_class": [
+            {"idx": i, "precision": float(prec[i]), "recall": float(rec[i]),
+             "f1": float(f1[i]), "iou": float(iou[i]),
+             "name": class_names[i] if class_names else str(i)}
+            for i in range(num_classes)
+        ]
+    }
+    (save_dir / "metrics").mkdir(exist_ok=True)
+    json.dump(metrics, open(save_dir / "metrics" / f"epoch_{epoch:03d}.json", "w"), indent=2)
+
+    # Save confusion matrix plot
+    _plot_confmat(cm, class_names or [str(i) for i in range(num_classes)],
+                  save_dir / f"confmat_epoch_{epoch:03d}.png")
+
+    # Qualitative: save a few wrong predictions
+    wrong_idx = (preds != labels).nonzero(as_tuple=False).flatten().tolist()
+    (save_dir / "qual").mkdir(exist_ok=True)
+    for k, idx in enumerate(wrong_idx[:max_bad]):
+        grid = _clip_contact_sheet(clips[idx].cpu())  # (C,H,W*)
+        vutils.save_image(grid, save_dir / "qual" / f"wrong_{epoch:03d}_{k:03d}_t{int(labels[idx])}_p{int(preds[idx])}.png")
+    return acc, loss, cm
 
 # ------------------------------
 # Main
@@ -303,8 +432,8 @@ def run_one_epoch(model, loader, criterion, optimizer, device, train=True):
 def main():
     parser = argparse.ArgumentParser(description="Train a tiny 3D CNN on HGD (CPU-friendly).")
     parser.add_argument("--index", type=str, default="hgd_index.json", help="Path to index JSON built from CSV.")
-    parser.add_argument("--epochs", type=int, default=5)
-    parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--clip_len", type=int, default=16, help="Temporal frames per clip (keep small on CPU).")
     parser.add_argument("--resize", type=int, default=112, help="Spatial size (H=W). 112 is good for CPU dev.")
     parser.add_argument("--lr", type=float, default=3e-4)
@@ -342,6 +471,15 @@ def main():
     set_seed(args.seed)
     device = get_device(force_cpu=args.force_cpu)
     print(f"[info] device: {device}")
+
+    # Logging setup
+    run_dir = _next_run_dir("runs/train")
+    (run_dir / "weights").mkdir(parents=True, exist_ok=True)
+    (run_dir / "metrics").mkdir(exist_ok=True)
+    (run_dir / "qual").mkdir(exist_ok=True)
+    json.dump(vars(args), open(run_dir / "hparams.json", "w"), indent=2)
+    print(f"[info] logging to: {run_dir}")
+    class_names = [f"c{i}" for i in range(args.num_classes)]
 
     # Dataset instances: one with train=True (augs on), one with train=False (no augs)
     size = (args.resize, args.resize)
@@ -394,21 +532,63 @@ def main():
             val_loss, val_acc     = run_one_epoch(model, val_loader,   criterion, optimizer, device, train=False)
             dt = time.time() - t0
 
-            print(f"[epoch {epoch}] "
-                  f"train_loss={train_loss:.4f}  train_acc={train_acc:.3f}  "
-                  f"val_loss={val_loss:.4f}  val_acc={val_acc:.3f}  "
-                  f"time={dt:.1f}s")
+            # print(f"[epoch {epoch}] "
+            #       f"train_loss={train_loss:.4f}  train_acc={train_acc:.3f}  "
+            #       f"val_loss={val_loss:.4f}  val_acc={val_acc:.3f}  "
+            #       f"time={dt:.1f}s")
 
-            if val_acc > best_val_acc:
-                best_val_acc = val_acc
-                torch.save({
-                    "epoch": epoch,
-                    "model_state": model.state_dict(),
-                    "optimizer_state": optimizer.state_dict(),
-                    "val_acc": best_val_acc,
-                    "args": vars(args),
-                }, args.save_path)
-                print(f"[info] ↑ new best val_acc={best_val_acc:.3f}; checkpoint saved to {args.save_path}")
+            # if val_acc > best_val_acc:
+            #     best_val_acc = val_acc
+            #     torch.save({
+            #         "epoch": epoch,
+            #         "model_state": model.state_dict(),
+            #         "optimizer_state": optimizer.state_dict(),
+            #         "val_acc": best_val_acc,
+            #         "args": vars(args),
+            #     }, args.save_path)
+            #     print(f"[info] ↑ new best val_acc={best_val_acc:.3f}; checkpoint saved to {args.save_path}")
+
+            print(f"[epoch {epoch}] "
+            f"train_loss={train_loss:.4f}  train_acc={train_acc:.3f}")
+
+        # Full eval with metrics + artifacts
+        val_logits_loss = nn.CrossEntropyLoss()
+        val_acc, val_loss_exact, cm = evaluate_full(
+            model, val_loader, criterion, device,
+            num_classes=args.num_classes,
+            class_names=class_names,
+            save_dir=run_dir,
+            epoch=epoch,
+            max_bad=12
+        )
+
+        dt = time.time() - t0
+        print(f"[epoch {epoch}] "
+            f"val_loss={val_loss_exact:.4f}  val_acc={val_acc:.3f}  "
+            f"time={dt:.1f}s")
+
+        # Append a one-line CSV log (like YOLO)
+        with open(run_dir / "results.csv", "a") as f:
+            if epoch == 1 and f.tell() == 0:
+                f.write("epoch,train_loss,train_acc,val_loss,val_acc,precision_macro,recall_macro,f1_macro,iou_macro,time\n")
+            # load the macro metrics we just wrote
+            mpath = run_dir / "metrics" / f"epoch_{epoch:03d}.json"
+            m = json.load(open(mpath))
+            f.write(f"{epoch},{train_loss:.6f},{train_acc:.6f},{m['loss']:.6f},{m['accuracy']:.6f},"
+                    f"{m['precision_macro']:.6f},{m['recall_macro']:.6f},{m['f1_macro']:.6f},{m['iou_macro']:.6f},{dt:.3f}\n")
+
+        # Save best weights under run_dir/weights
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            best_path = run_dir / "weights" / "best.pt"
+            torch.save({
+                "epoch": epoch,
+                "model_state": model.state_dict(),
+                "optimizer_state": optimizer.state_dict(),
+                "val_acc": best_val_acc,
+                "args": vars(args),
+            }, best_path)
+            print(f"[info] ↑ new best val_acc={best_val_acc:.3f}; saved to {best_path}")
 
     except KeyboardInterrupt:
         print("\n[warn] Training interrupted by user (Ctrl+C).")

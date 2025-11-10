@@ -25,6 +25,37 @@ def uniform_indices(n_src, n_out, jitter=False):
             idx = [int(i*step) for i in range(n_out)]
     return torch.tensor(idx)
 
+def resize_letterbox(video, target_size=(112,112)):
+    """
+    video: (T,C,H,W) or (C,T,H,W)
+    target_size: (new_h, new_w)
+    returns video resized with preserved aspect ratio and padding
+    """
+    is_CT = video.shape[0] == 3  # detect layout
+    if is_CT:  # (C,T,H,W)
+        video = video.permute(1,0,2,3)  # -> (T,C,H,W)
+
+    T, C, H, W = video.shape
+    new_h, new_w = target_size
+    scale = min(new_h/H, new_w/W)
+    resized_h, resized_w = int(round(H*scale)), int(round(W*scale))
+    
+    # resize first
+    video = F.interpolate(video, size=(resized_h, resized_w), mode="bilinear", align_corners=False)
+    
+    # pad to target
+    pad_h = new_h - resized_h
+    pad_w = new_w - resized_w
+    pad_top = pad_h // 2
+    pad_bottom = pad_h - pad_top
+    pad_left = pad_w // 2
+    pad_right = pad_w - pad_left
+    video = F.pad(video, (pad_left, pad_right, pad_top, pad_bottom))  # pad=(left,right,top,bottom)
+    
+    if is_CT:
+        video = video.permute(1,0,2,3)  # back to (C,T,H,W)
+    return video
+
 class HGDClips(torch.utils.data.Dataset):
     def __init__(
         self,
@@ -61,7 +92,8 @@ class HGDClips(torch.utils.data.Dataset):
 
         # Spatial resize
         if self.size is not None:
-            video = F.interpolate(video, size=self.size, mode="bilinear", align_corners=False)
+            # video = F.interpolate(video, size=self.size, mode="bilinear", align_corners=False)
+            video = resize_letterbox(video, target_size=self.size)
 
         # Random horizontal flip
         if self.random_flip and torch.rand(()) < 0.5:
