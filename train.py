@@ -250,13 +250,22 @@ def set_seed(seed: int):
     torch.cuda.manual_seed_all(seed)
 
 
-def get_device(force_cpu=False):
+def get_device(force_cpu=False, use_gpu=False):
     if force_cpu:
+        print("[info] Forcing CPU mode.")
         return torch.device("cpu")
-    # Prefer Apple Silicon MPS if available
+
+    if use_gpu and torch.cuda.is_available():
+        print(f"[info] Using CUDA GPU: {torch.cuda.get_device_name(0)}")
+        return torch.device("cuda")
+
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        print("[info] Using Apple MPS backend.")
         return torch.device("mps")
+
+    print("[info] Defaulting to CPU.")
     return torch.device("cpu")
+
 
 
 def accuracy_top1(logits, targets):
@@ -464,7 +473,8 @@ def main():
     parser.add_argument("--seed", type=int, default=230)
     parser.add_argument("--val_split", type=float, default=0.2)
     parser.add_argument("--num_workers", type=int, default=0, help="macOS often happier with 0.")
-    parser.add_argument("--force_cpu", action="store_true", help="Force CPU even if MPS is available.")
+    parser.add_argument("--force_cpu", action="store_true", help="Force CPU even if MPS/GPU is available.")
+    parser.add_argument("--use_gpu", action="store_true", help="Use CUDA GPU if available.")
     parser.add_argument("--save_path", type=str, default="best.pt")
     # add to argparse
     parser.add_argument("--flip_prob", type=float, default=0.5)
@@ -492,7 +502,7 @@ def main():
     args = parser.parse_args()
 
     set_seed(args.seed)
-    device = get_device(force_cpu=args.force_cpu)
+    device = get_device(force_cpu=args.force_cpu, use_gpu=args.use_gpu)
     print(f"[info] device: {device}")
 
     # Logging setup
