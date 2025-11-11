@@ -4,8 +4,12 @@ from pathlib import Path
 from torchvision.io import read_video
 import torch.nn.functional as F
 
-IMGNET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(3,1,1,1)
-IMGNET_STD  = torch.tensor([0.229, 0.224, 0.225]).view(3,1,1,1)
+# IMGNET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(3,1,1,1)
+# IMGNET_STD  = torch.tensor([0.229, 0.224, 0.225]).view(3,1,1,1)
+
+K400_MEAN = torch.tensor([0.43216, 0.394666, 0.37645]).view(3,1,1,1)
+K400_STD  = torch.tensor([0.22803, 0.22145, 0.216989]).view(3,1,1,1)
+
 FPS = 30.0
 
 def uniform_indices(n_src, n_out, jitter=False):
@@ -111,8 +115,10 @@ class HGDClips(torch.utils.data.Dataset):
         clip = clip.permute(1,0,2,3)           # (C,T,H,W)
 
         # Normalize
-        mean = IMGNET_MEAN.to(dtype=clip.dtype, device=clip.device)
-        std  = IMGNET_STD.to(dtype=clip.dtype, device=clip.device)
+        # mean = IMGNET_MEAN.to(dtype=clip.dtype, device=clip.device)
+        # std  = IMGNET_STD.to(dtype=clip.dtype, device=clip.device)
+        mean = K400_MEAN.to(dtype=clip.dtype, device=clip.device)
+        std  = K400_STD.to(dtype=clip.dtype, device=clip.device)
         clip = (clip - mean) / std
 
         label = it["label"]

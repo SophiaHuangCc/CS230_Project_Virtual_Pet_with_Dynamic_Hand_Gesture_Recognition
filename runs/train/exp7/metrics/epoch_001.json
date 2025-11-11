@@ -1,0 +1,227 @@
+{
+  "epoch": 1,
+  "loss": 3.352576732635498,
+  "accuracy": 0.03225806451612903,
+  "precision_macro": 0.0026154029183089733,
+  "recall_macro": 0.03703703731298447,
+  "f1_macro": 0.00430243881419301,
+  "iou_macro": 0.002215891145169735,
+  "per_class": [
+    {
+      "idx": 0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c0"
+    },
+    {
+      "idx": 1,
+      "precision": 0.03215434029698372,
+      "recall": 0.9090909361839294,
+      "f1": 0.06211179867386818,
+      "iou": 0.03205128386616707,
+      "name": "c1"
+    },
+    {
+      "idx": 2,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c2"
+    },
+    {
+      "idx": 3,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c3"
+    },
+    {
+      "idx": 4,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c4"
+    },
+    {
+      "idx": 5,
+      "precision": 0.03846153989434242,
+      "recall": 0.09090909361839294,
+      "f1": 0.054054055362939835,
+      "iou": 0.02777777798473835,
+      "name": "c5"
+    },
+    {
+      "idx": 6,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c6"
+    },
+    {
+      "idx": 7,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c7"
+    },
+    {
+      "idx": 8,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c8"
+    },
+    {
+      "idx": 9,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c9"
+    },
+    {
+      "idx": 10,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c10"
+    },
+    {
+      "idx": 11,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c11"
+    },
+    {
+      "idx": 12,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c12"
+    },
+    {
+      "idx": 13,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c13"
+    },
+    {
+      "idx": 14,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c14"
+    },
+    {
+      "idx": 15,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c15"
+    },
+    {
+      "idx": 16,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c16"
+    },
+    {
+      "idx": 17,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c17"
+    },
+    {
+      "idx": 18,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c18"
+    },
+    {
+      "idx": 19,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c19"
+    },
+    {
+      "idx": 20,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c20"
+    },
+    {
+      "idx": 21,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c21"
+    },
+    {
+      "idx": 22,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c22"
+    },
+    {
+      "idx": 23,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c23"
+    },
+    {
+      "idx": 24,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c24"
+    },
+    {
+      "idx": 25,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c25"
+    },
+    {
+      "idx": 26,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "iou": 0.0,
+      "name": "c26"
+    }
+  ]
+}

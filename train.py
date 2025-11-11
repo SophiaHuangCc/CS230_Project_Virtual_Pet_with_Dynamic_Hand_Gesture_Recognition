@@ -268,16 +268,30 @@ def accuracy_top1(logits, targets):
 # ------------------------------
 # Training / Eval loops
 # ------------------------------
+def force_bn_eval(model, freeze_affine=True):
+    for m in model.modules():
+        if isinstance(m, nn.modules.batchnorm._BatchNorm):
+            m.eval()  # no running-stat updates
+            if freeze_affine:
+                if m.weight is not None: m.weight.requires_grad = False
+                if m.bias   is not None: m.bias.requires_grad   = False
+
 def run_one_epoch(model, loader, criterion, optimizer, device, train=True):
     model.train(train)
+    force_bn_eval(model, freeze_affine=True)
     total_loss = 0.0
     total_correct = 0
     total_count = 0
 
     pbar = tqdm(loader, desc="train" if train else "val", leave=False)
     for clips, labels in pbar:
+        if total_count == 0:
+            print(f"[debug] batch clips={tuple(clips.shape)} {clips.dtype}; labels={labels.dtype} range=[{labels.min().item()},{labels.max().item()}]")
         clips = clips.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
+        if total_count == 0:
+            print("[DEBUG] shape of clips after to(device):", tuple(clips.shape))
+            print("[DEBUG] shape of labels after to(device):", tuple(labels.shape))
 
         if train:
             optimizer.zero_grad(set_to_none=True)
@@ -432,8 +446,8 @@ def evaluate_full(model, loader, criterion, device, num_classes, class_names, sa
 def main():
     parser = argparse.ArgumentParser(description="Train a tiny 3D CNN on HGD (CPU-friendly).")
     parser.add_argument("--index", type=str, default="hgd_index.json", help="Path to index JSON built from CSV.")
-    parser.add_argument("--epochs", type=int, default=1)
-    parser.add_argument("--batch_size", type=int, default=1)
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--clip_len", type=int, default=16, help="Temporal frames per clip (keep small on CPU).")
     parser.add_argument("--resize", type=int, default=112, help="Spatial size (H=W). 112 is good for CPU dev.")
     parser.add_argument("--lr", type=float, default=3e-4)
@@ -512,15 +526,16 @@ def main():
     # Tiny3DCNN
     # model = model = Tiny3DCNN(num_classes=27).to(device)
     # Transfer Learning
-    # model, weights = TransferModel_1(args.arch, args.num_classes, args.pretrained, args.dropout)
-    # # Freeze more (strongest freeze)
-    # freeze_until(model, stage="layer3")  # freezes stem, layer1, layer2, layer3
-    # optimizer = make_optimizer(model, base_lr=args.lr, weight_decay=args.weight_decay, unfreeze_last=False)
-    # model = model.to(device)
-    # Baseline ResNet
-    model = ResNet3D(block="r3d", layers=(2,2,2,2), num_classes=27).to(device)
+    model, weights = TransferModel_1(args.arch, args.num_classes, args.pretrained, args.dropout)
+    # Freeze more (strongest freeze)
+    freeze_until(model, stage="layer3")  # freezes stem, layer1, layer2, layer3
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    optimizer = make_optimizer(model, base_lr=args.lr, weight_decay=args.weight_decay, unfreeze_last=False)
+    model = model.to(device)
+    # Baseline ResNet
+    # model = ResNet3D(block="r3d", layers=(2,2,2,2), num_classes=27).to(device)
+    # criterion = nn.CrossEntropyLoss()
+    # optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     best_val_acc = 0.0
     start_time = time.time()
