@@ -23,8 +23,15 @@ data/
 *.h5
 *.csv
 
+!runs/
+!runs/train/
 !runs/train/exp13/
+!runs/train/exp13/**/*.png
+!runs/train/exp13/*.csv
 !runs/train/exp15/
+!runs/train/exp15/**/*.png
+!runs/train/exp15/*.csv
+
 
 # Logs / temp files
 *.log
