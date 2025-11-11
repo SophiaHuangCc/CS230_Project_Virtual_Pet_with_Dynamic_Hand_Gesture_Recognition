@@ -332,17 +332,19 @@ def _next_run_dir(base="runs/train"):
     return base / f"exp{n}"
 
 @torch.no_grad()
+@torch.no_grad()
 def _collect_logits_labels(model, loader, device):
     model.eval()
     all_logits, all_labels, sample_clips = [], [], []
     for clips, labels in loader:
         clips = clips.to(device, non_blocking=True)
-        labels = labels.to(device, non_blocking=True)
+        # keep labels on CPU and long
+        labels = labels.long()                     # <— IMPORTANT
         logits = model(clips)
         all_logits.append(logits.detach().cpu())
         all_labels.append(labels.detach().cpu())
-        # keep a few clips for qualitative export
-        sample_clips.append(clips.detach().cpu())
+        # keep only a few clips to avoid huge RAM use
+        sample_clips.append(clips.detach().cpu()[:2])
     return torch.cat(all_logits), torch.cat(all_labels), torch.cat(sample_clips)
 
 def _confmat(num_classes, preds, labels):
@@ -406,6 +408,13 @@ def _clip_contact_sheet(clip_CT_HW, n=8):  # clip is (C,T,H,W)
 def evaluate_full(model, loader, criterion, device, num_classes, class_names, save_dir, epoch, max_bad=12):
     save_dir = Path(save_dir); save_dir.mkdir(parents=True, exist_ok=True)
     logits, labels, clips = _collect_logits_labels(model, loader, device)
+    # sanity checks to catch bad labels early
+    assert logits.ndim == 2 and labels.ndim == 1, f"shapes {logits.shape} vs {labels.shape}"
+    assert labels.dtype == torch.long, f"labels dtype {labels.dtype} (need long)"
+    assert logits.shape[0] == labels.shape[0], f"N mismatch {logits.shape[0]} vs {labels.shape[0]}"
+    mn, mx = int(labels.min()), int(labels.max())
+    assert 0 <= mn and mx < logits.shape[1], f"label range [{mn},{mx}] out of [0,{logits.shape[1]-1}]"
+    
     loss = criterion(logits, labels).item()
 
     preds = logits.argmax(1)
