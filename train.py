@@ -534,17 +534,17 @@ def main():
     # Model / loss / opt
     # Tiny3DCNN
     # model = model = Tiny3DCNN(num_classes=27).to(device)
-    # Transfer Learning
-    model, weights = TransferModel_1(args.arch, args.num_classes, args.pretrained, args.dropout)
-    # Freeze more (strongest freeze)
-    freeze_until(model, stage="layer3")  # freezes stem, layer1, layer2, layer3
-    criterion = nn.CrossEntropyLoss()
-    optimizer = make_optimizer(model, base_lr=args.lr, weight_decay=args.weight_decay, unfreeze_last=False)
-    model = model.to(device)
-    # Baseline ResNet
-    # model = ResNet3D(block="r3d", layers=(2,2,2,2), num_classes=27).to(device)
+    # Transfer Learning （exp13 pretrained r3d_18=0.343)
+    # model, weights = TransferModel_1(args.arch, args.num_classes, args.pretrained, args.dropout)
+    # # Freeze more (strongest freeze)
+    # freeze_until(model, stage="layer3")  # freezes stem, layer1, layer2, layer3
     # criterion = nn.CrossEntropyLoss()
-    # optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    # optimizer = make_optimizer(model, base_lr=args.lr, weight_decay=args.weight_decay, unfreeze_last=False)
+    # model = model.to(device)
+    # Baseline ResNet
+    model = ResNet3D(block="r3d", layers=(2,2,2,2), num_classes=27).to(device)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     best_val_acc = 0.0
     start_time = time.time()
