@@ -451,11 +451,27 @@ def evaluate_full(model, loader, criterion, device, num_classes, class_names, sa
                   save_dir / f"confmat_epoch_{epoch:03d}.png")
 
     # Qualitative: save a few wrong predictions
+    # wrong_idx = (preds != labels).nonzero(as_tuple=False).flatten().tolist()
+    # (save_dir / "qual").mkdir(exist_ok=True)
+    # for k, idx in enumerate(wrong_idx[:max_bad]):
+    #     grid = _clip_contact_sheet(clips[idx].cpu())  # (C,H,W*)
+    #     vutils.save_image(grid, save_dir / "qual" / f"wrong_{epoch:03d}_{k:03d}_t{int(labels[idx])}_p{int(preds[idx])}.png")
+    # return acc, loss, cm
+    # Qualitative: save a few wrong predictions
     wrong_idx = (preds != labels).nonzero(as_tuple=False).flatten().tolist()
     (save_dir / "qual").mkdir(exist_ok=True)
+
+    num_clips = clips.size(0)
     for k, idx in enumerate(wrong_idx[:max_bad]):
+        if idx >= num_clips:
+            # we only kept a subset of clips in _collect_logits_labels, so skip out-of-range indices
+            continue
         grid = _clip_contact_sheet(clips[idx].cpu())  # (C,H,W*)
-        vutils.save_image(grid, save_dir / "qual" / f"wrong_{epoch:03d}_{k:03d}_t{int(labels[idx])}_p{int(preds[idx])}.png")
+        vutils.save_image(
+            grid,
+            save_dir / "qual" / f"wrong_{epoch:03d}_{k:03d}_t{int(labels[idx])}_p{int(preds[idx])}.png"
+        )
+
     return acc, loss, cm
 
 # ------------------------------
