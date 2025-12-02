@@ -501,23 +501,56 @@ def main():
 
     args = parser.parse_args()
 
+    # --- define the 10 classes we care about ---
+    KEEP_CLASSES = [10, 11, 16, 17, 18, 23, 24, 25, 26, 27]
+    args.num_classes = len(KEEP_CLASSES)  # 10
+
     set_seed(args.seed)
     device = get_device(force_cpu=args.force_cpu, use_gpu=args.use_gpu)
     print(f"[info] device: {device}")
 
     # Logging setup
+    # run_dir = _next_run_dir("runs/train")
+    # (run_dir / "weights").mkdir(parents=True, exist_ok=True)
+    # (run_dir / "metrics").mkdir(exist_ok=True)
+    # (run_dir / "qual").mkdir(exist_ok=True)
+    # json.dump(vars(args), open(run_dir / "hparams.json", "w"), indent=2)
+    # print(f"[info] logging to: {run_dir}")
+    # class_names = [f"c{i}" for i in range(args.num_classes)]
+
+    # Dataset instances: one with train=True (augs on), one with train=False (no augs)
+    # size = (args.resize, args.resize)
+    # full_train_ds = HGDClips(args.index, clip_len=args.clip_len, size=size, train=True)
+    # full_eval_ds  = HGDClips(args.index, clip_len=args.clip_len, size=size, train=False)
+
+    # Logging setup: 10 classes
     run_dir = _next_run_dir("runs/train")
     (run_dir / "weights").mkdir(parents=True, exist_ok=True)
     (run_dir / "metrics").mkdir(exist_ok=True)
     (run_dir / "qual").mkdir(exist_ok=True)
     json.dump(vars(args), open(run_dir / "hparams.json", "w"), indent=2)
     print(f"[info] logging to: {run_dir}")
-    class_names = [f"c{i}" for i in range(args.num_classes)]
+
+    # Human-readable class names for the 10 kept gestures
+    # (maps index 0..9 back to original class ids)
+    class_names = [f"cls{cls_id:02d}" for cls_id in KEEP_CLASSES]
 
     # Dataset instances: one with train=True (augs on), one with train=False (no augs)
     size = (args.resize, args.resize)
-    full_train_ds = HGDClips(args.index, clip_len=args.clip_len, size=size, train=True)
-    full_eval_ds  = HGDClips(args.index, clip_len=args.clip_len, size=size, train=False)
+    full_train_ds = HGDClips(
+        args.index,
+        clip_len=args.clip_len,
+        size=size,
+        train=True,
+        keep_classes=KEEP_CLASSES,     # <-- NEW
+    )
+    full_eval_ds  = HGDClips(
+        args.index,
+        clip_len=args.clip_len,
+        size=size,
+        train=False,
+        keep_classes=KEEP_CLASSES,     # <-- NEW
+    )
 
     # Split indices reproducibly
     n_total = len(full_train_ds)
@@ -545,16 +578,20 @@ def main():
     # Tiny3DCNN
     # model = model = Tiny3DCNN(num_classes=27).to(device)
     # Transfer Learning （exp13 pretrained r3d_18=0.343)
-    # model, weights = TransferModel_1(args.arch, args.num_classes, args.pretrained, args.dropout)
-    # # Freeze more (strongest freeze)
-    # freeze_until(model, stage="layer3")  # freezes stem, layer1, layer2, layer3
-    # criterion = nn.CrossEntropyLoss()
-    # optimizer = make_optimizer(model, base_lr=args.lr, weight_decay=args.weight_decay, unfreeze_last=False)
-    # model = model.to(device)
-    # Baseline ResNet
-    model = ResNet3D(block="r3d", layers=(2,2,2,2), num_classes=27).to(device)
+    model, weights = TransferModel_1(args.arch, args.num_classes, args.pretrained, args.dropout)
+    # Freeze more (strongest freeze)
+    freeze_until(model, stage="layer3")  # freezes stem, layer1, layer2, layer3
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    optimizer = make_optimizer(model, base_lr=args.lr, weight_decay=args.weight_decay, unfreeze_last=False)
+    model = model.to(device)
+    # Baseline ResNet
+    # model = ResNet3D(block="r3d", layers=(2,2,2,2), num_classes=27).to(device)
+    # criterion = nn.CrossEntropyLoss()
+    # optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    # 10 classes
+    # model = ResNet3D(block="r3d", layers=(2,2,2,2), num_classes=args.num_classes).to(device)
+    # criterion = nn.CrossEntropyLoss()
+    # optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     best_val_acc = 0.0
     start_time = time.time()

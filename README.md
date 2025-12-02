@@ -118,7 +118,12 @@ hand_gesture_project/
 
 ---
 
-## 7. Authors
+## 7. Run
+python train.py --pretrained --epochs 40 --batch_size 16 --clip_len 16 --resize 112 --arch r3d_18 --freeze_until layer3
+
+---
+
+## 8. Authors
 
 CS230 - Dynamic Hand Gesture Recognition Team  
 Stanford University  

@@ -60,6 +60,22 @@ def resize_letterbox(video, target_size=(112,112)):
         video = video.permute(1,0,2,3)  # back to (C,T,H,W)
     return video
 
+# class HGDClips(torch.utils.data.Dataset):
+#     def __init__(
+#         self,
+#         index_json,
+#         clip_len=32,
+#         size=(112,112),
+#         train=True,
+#         temporal_jitter=True,
+#         random_flip=True,
+#         brightness=0.0,             
+#     ):
+#         self.items = json.loads(Path(index_json).read_text())
+#         self.clip_len = clip_len
+#         self.size = size
+#         self.train = train
+
 class HGDClips(torch.utils.data.Dataset):
     def __init__(
         self,
@@ -69,9 +85,28 @@ class HGDClips(torch.utils.data.Dataset):
         train=True,
         temporal_jitter=True,
         random_flip=True,
-        brightness=0.0,             
+        brightness=0.0,
+        keep_classes=None,          # <-- NEW
     ):
-        self.items = json.loads(Path(index_json).read_text())
+        items = json.loads(Path(index_json).read_text())
+
+        # Optional class filtering + remap to compact indices 0..K-1
+        if keep_classes is not None:
+            keep_classes = list(keep_classes)
+            class_to_new = {cls: i for i, cls in enumerate(keep_classes)}
+            filtered = []
+            for it in items:
+                cls_id = it["class"]        # 1..27 from your index
+                if cls_id in class_to_new:
+                    it = dict(it)           # copy so we don’t mutate original
+                    it["label"] = class_to_new[cls_id]  # 0..(K-1)
+                    filtered.append(it)
+            self.items = filtered
+            self.keep_classes = keep_classes
+            self.class_to_new = class_to_new
+        else:
+            self.items = items
+
         self.clip_len = clip_len
         self.size = size
         self.train = train
