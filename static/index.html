@@ -33,8 +33,12 @@
             <!-- Animation Section -->
             <div class="animation-section">
                 <h2>Your Pet</h2>
+                <div class="current-action" id="currentAction">
+                    <div class="action-status" id="actionStatus">Waiting for gesture...</div>
+                    <div class="action-details" id="actionDetails"></div>
+                </div>
                 <div class="pet-container">
-                    <video id="petAnimation" autoplay loop muted>
+                    <video id="petAnimation" muted>
                         <p>Your browser doesn't support video playback.</p>
                     </video>
                     <div class="pet-placeholder" id="petPlaceholder">

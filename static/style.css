@@ -59,6 +59,72 @@ header h1 {
     color: #667eea;
 }
 
+.current-action {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-radius: 10px;
+    padding: 15px 20px;
+    margin-bottom: 15px;
+    border: 2px solid #dee2e6;
+    transition: all 0.3s ease;
+}
+
+.current-action.playing {
+    border-color: #ffc107;
+    background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
+}
+
+.current-action.detecting {
+    border-color: #28a745;
+    background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+}
+
+.current-action.detected {
+    border-color: #007bff;
+    background: linear-gradient(135deg, #cfe2ff 0%, #b3d7ff 100%);
+}
+
+.action-status {
+    font-size: 1.2rem;
+    font-weight: bold;
+    margin-bottom: 10px;
+    color: #495057;
+}
+
+.action-status.playing {
+    color: #856404;
+}
+
+.action-status.detecting {
+    color: #155724;
+}
+
+.action-details {
+    font-size: 0.95rem;
+    color: #6c757d;
+    line-height: 1.6;
+}
+
+.action-name {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #495057;
+    margin-bottom: 5px;
+}
+
+.gesture-id {
+    font-size: 0.9rem;
+    color: #6c757d;
+    margin-bottom: 8px;
+}
+
+.detection-status {
+    font-size: 0.85rem;
+    font-style: italic;
+    padding-top: 8px;
+    border-top: 1px solid rgba(0, 0, 0, 0.1);
+    margin-top: 8px;
+}
+
 .video-container {
     position: relative;
     width: 100%;

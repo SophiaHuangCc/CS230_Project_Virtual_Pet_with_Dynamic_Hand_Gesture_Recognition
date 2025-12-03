@@ -12,6 +12,20 @@ const INFERENCE_INTERVAL = 500; // Run inference every 500ms
 // Gesture class IDs (matching backend config)
 const GESTURE_CLASSES = [10, 11, 16, 17, 18, 23, 24, 25, 26, 27];
 
+// Gesture ID to action name mapping
+const GESTURE_ACTIONS = {
+    10: "Action 1",
+    11: "Action 2",
+    16: "Action 3",
+    17: "Action 4",
+    18: "Action 5",
+    23: "Action 6",
+    24: "Action 7",
+    25: "Action 8",
+    26: "Action 9",
+    27: "Action 10"
+};
+
 // DOM elements
 const webcam = document.getElementById('webcam');
 const canvas = document.getElementById('canvas');
@@ -23,6 +37,9 @@ const petAnimation = document.getElementById('petAnimation');
 const petPlaceholder = document.getElementById('petPlaceholder');
 const predictionInfo = document.getElementById('predictionInfo');
 const gestureList = document.getElementById('gestureList');
+const currentAction = document.getElementById('currentAction');
+const actionStatus = document.getElementById('actionStatus');
+const actionDetails = document.getElementById('actionDetails');
 
 // State
 let stream = null;
@@ -30,7 +47,9 @@ let frameBuffer = [];
 let isCapturing = false;
 let lastInferenceTime = 0;
 let currentGestureId = null;
+let currentGestureConfidence = null; // Store confidence for display during animation
 let animationInterval = null;
+let isAnimationPlaying = false; // Track if animation is currently playing
 
 // Initialize gesture list
 function initGestureList() {
@@ -75,6 +94,11 @@ function addFrameToBuffer() {
 
 // Send frames to backend for prediction
 async function predictGesture() {
+    // Skip inference if animation is currently playing
+    if (isAnimationPlaying) {
+        return;
+    }
+
     if (frameBuffer.length !== CLIP_LEN) {
         return;
     }
@@ -135,9 +159,10 @@ function handlePrediction(result) {
         activeItem.classList.add('active');
     }
 
-    // Load and play animation if gesture changed
-    if (currentGestureId !== class_id) {
+    // Load and play animation if gesture changed and no animation is currently playing
+    if (currentGestureId !== class_id && !isAnimationPlaying) {
         currentGestureId = class_id;
+        currentGestureConfidence = confidence;
         loadAnimation(class_id);
     }
 }
@@ -147,27 +172,73 @@ function loadAnimation(gestureId) {
     // Backend handles format detection, just call the endpoint
     const animationUrl = `/animations/${gestureId}`;
     
-    // Reset video element
+    // Set flag to pause inference while animation plays (but don't update display yet)
+    isAnimationPlaying = true;
+    
+    // Handle animation loaded and ready to play
     petAnimation.onloadeddata = () => {
+        // Show "Gesture Detected" with gesture info while animation is playing
+        const actionName = GESTURE_ACTIONS[gestureId] || `Gesture ${gestureId}`;
+        const confidenceText = currentGestureConfidence 
+            ? ` (${(currentGestureConfidence * 100).toFixed(1)}% confidence)`
+            : '';
+        currentAction.className = 'current-action playing';
+        actionStatus.textContent = '🎯 Gesture Detected';
+        actionStatus.className = 'action-status playing';
+        actionDetails.innerHTML = `
+            <div class="action-name">${actionName}</div>
+            <div class="gesture-id">Hand Gesture: ${gestureId}${confidenceText}</div>
+            <div class="detection-status">⚠️ Gesture detection paused - Animation playing</div>
+        `;
+        status.textContent = 'Playing animation...';
+        
         petPlaceholder.classList.add('hidden');
         petAnimation.classList.add('show');
         petAnimation.play().catch(err => {
             console.error('Error playing animation:', err);
-            // If play fails, show placeholder
+            // If play fails, show placeholder and resume detection
             petPlaceholder.classList.remove('hidden');
             petAnimation.classList.remove('show');
+            isAnimationPlaying = false;
+            status.textContent = 'Camera active';
+            updateActionDisplayForDetection();
         });
     };
     
+    // Handle animation ended - resume gesture detection
+    petAnimation.onended = () => {
+        isAnimationPlaying = false;
+        status.textContent = 'Camera active - Ready for next gesture';
+        updateActionDisplayForDetection();
+        // Clear the gesture info overlay after a short delay
+        setTimeout(() => {
+            gestureInfo.classList.remove('show');
+        }, 1000);
+    };
+    
+    // Handle animation errors
     petAnimation.onerror = () => {
         console.warn(`Animation not found for gesture ${gestureId}`);
         petPlaceholder.classList.remove('hidden');
         petAnimation.classList.remove('show');
+        isAnimationPlaying = false;
+        status.textContent = 'Camera active';
+        updateActionDisplayForDetection();
     };
     
     // Load the video
     petAnimation.src = animationUrl;
     petAnimation.load(); // Force reload
+}
+
+// Update action display when detecting gestures
+function updateActionDisplayForDetection() {
+    currentAction.className = 'current-action detecting';
+    actionStatus.textContent = '👁️ Detecting Gestures';
+    actionStatus.className = 'action-status detecting';
+    actionDetails.innerHTML = `
+        <div class="detection-status">Ready to detect hand gestures</div>
+    `;
 }
 
 // Start webcam capture
@@ -191,6 +262,7 @@ async function startCapture() {
         startBtn.disabled = true;
         stopBtn.disabled = false;
         status.textContent = 'Camera active';
+        updateActionDisplayForDetection();
 
         // Start frame capture loop
         animationInterval = setInterval(() => {
@@ -222,12 +294,20 @@ function stopCapture() {
     webcam.srcObject = null;
     frameBuffer = [];
     currentGestureId = null;
+    currentGestureConfidence = null;
+    isAnimationPlaying = false; // Reset animation state
 
     startBtn.disabled = false;
     stopBtn.disabled = true;
     status.textContent = 'Camera stopped';
     gestureInfo.classList.remove('show');
     predictionInfo.innerHTML = '';
+    
+    // Reset action display
+    currentAction.className = 'current-action';
+    actionStatus.textContent = 'Waiting for gesture...';
+    actionStatus.className = 'action-status';
+    actionDetails.innerHTML = '';
     
     // Reset gesture list highlighting
     document.querySelectorAll('.gesture-item').forEach(item => {
@@ -238,6 +318,10 @@ function stopCapture() {
     petPlaceholder.classList.remove('hidden');
     petAnimation.classList.remove('show');
     petAnimation.src = '';
+    // Remove event listeners to prevent memory leaks
+    petAnimation.onended = null;
+    petAnimation.onerror = null;
+    petAnimation.onloadeddata = null;
 }
 
 // Check backend health on load
