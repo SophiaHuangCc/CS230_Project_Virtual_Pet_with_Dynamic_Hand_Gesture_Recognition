@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Virtual Pet - Hand Gesture Recognition</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🐾 Virtual Pet</h1>
+            <p class="subtitle">Control your pet with hand gestures!</p>
+        </header>
+
+        <div class="main-content">
+            <!-- Webcam Section -->
+            <div class="webcam-section">
+                <div class="video-container">
+                    <video id="webcam" autoplay playsinline muted></video>
+                    <canvas id="canvas" style="display: none;"></canvas>
+                    <div class="overlay">
+                        <div class="status" id="status">Initializing...</div>
+                        <div class="gesture-info" id="gestureInfo"></div>
+                    </div>
+                </div>
+                <div class="controls">
+                    <button id="startBtn" class="btn btn-primary">Start Camera</button>
+                    <button id="stopBtn" class="btn btn-secondary" disabled>Stop Camera</button>
+                </div>
+            </div>
+
+            <!-- Animation Section -->
+            <div class="animation-section">
+                <h2>Your Pet</h2>
+                <div class="pet-container">
+                    <video id="petAnimation" autoplay loop muted>
+                        <p>Your browser doesn't support video playback.</p>
+                    </video>
+                    <div class="pet-placeholder" id="petPlaceholder">
+                        <p>🎭</p>
+                        <p>Perform a gesture to see your pet!</p>
+                    </div>
+                </div>
+                <div class="prediction-info" id="predictionInfo"></div>
+            </div>
+        </div>
+
+        <!-- Info Panel -->
+        <div class="info-panel">
+            <h3>Gesture Classes</h3>
+            <div class="gesture-list" id="gestureList"></div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
+
+
