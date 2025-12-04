@@ -1,18 +1,37 @@
-# dataset_hgd_preproc.py
-import json, math, torch
+import json
+import torch
+import random
 from pathlib import Path
 from torchvision.io import read_video
+import torchvision.transforms.functional as TF 
+from torchvision import transforms # <--- Added for ColorJitter
 import torch.nn.functional as F
-
-# IMGNET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(3,1,1,1)
-# IMGNET_STD  = torch.tensor([0.229, 0.224, 0.225]).view(3,1,1,1)
 
 K400_MEAN = torch.tensor([0.43216, 0.394666, 0.37645]).view(3,1,1,1)
 K400_STD  = torch.tensor([0.22803, 0.22145, 0.216989]).view(3,1,1,1)
-
 FPS = 30.0
 
+def resize_letterbox(video, target_size=(112,112)):
+    # ... (Same helper function) ...
+    is_CT = video.shape[0] == 3
+    if is_CT: video = video.permute(1,0,2,3)
+    T, C, H, W = video.shape
+    new_h, new_w = target_size
+    scale = min(new_h/H, new_w/W)
+    resized_h, resized_w = int(round(H*scale)), int(round(W*scale))
+    video = F.interpolate(video, size=(resized_h, resized_w), mode="bilinear", align_corners=False)
+    pad_h = new_h - resized_h
+    pad_w = new_w - resized_w
+    pad_top = pad_h // 2
+    pad_bottom = pad_h - pad_top
+    pad_left = pad_w // 2
+    pad_right = pad_w - pad_left
+    video = F.pad(video, (pad_left, pad_right, pad_top, pad_bottom))
+    if is_CT: video = video.permute(1,0,2,3)
+    return video
+
 def uniform_indices(n_src, n_out, jitter=False):
+    # ... (Same helper function) ...
     if n_src <= 0: raise ValueError("Empty decoded segment")
     if n_src <= n_out:
         idx = list(range(n_src)) + [n_src-1] * (n_out - n_src)
@@ -29,53 +48,6 @@ def uniform_indices(n_src, n_out, jitter=False):
             idx = [int(i*step) for i in range(n_out)]
     return torch.tensor(idx)
 
-def resize_letterbox(video, target_size=(112,112)):
-    """
-    video: (T,C,H,W) or (C,T,H,W)
-    target_size: (new_h, new_w)
-    returns video resized with preserved aspect ratio and padding
-    """
-    is_CT = video.shape[0] == 3  # detect layout
-    if is_CT:  # (C,T,H,W)
-        video = video.permute(1,0,2,3)  # -> (T,C,H,W)
-
-    T, C, H, W = video.shape
-    new_h, new_w = target_size
-    scale = min(new_h/H, new_w/W)
-    resized_h, resized_w = int(round(H*scale)), int(round(W*scale))
-    
-    # resize first
-    video = F.interpolate(video, size=(resized_h, resized_w), mode="bilinear", align_corners=False)
-    
-    # pad to target
-    pad_h = new_h - resized_h
-    pad_w = new_w - resized_w
-    pad_top = pad_h // 2
-    pad_bottom = pad_h - pad_top
-    pad_left = pad_w // 2
-    pad_right = pad_w - pad_left
-    video = F.pad(video, (pad_left, pad_right, pad_top, pad_bottom))  # pad=(left,right,top,bottom)
-    
-    if is_CT:
-        video = video.permute(1,0,2,3)  # back to (C,T,H,W)
-    return video
-
-# class HGDClips(torch.utils.data.Dataset):
-#     def __init__(
-#         self,
-#         index_json,
-#         clip_len=32,
-#         size=(112,112),
-#         train=True,
-#         temporal_jitter=True,
-#         random_flip=True,
-#         brightness=0.0,             
-#     ):
-#         self.items = json.loads(Path(index_json).read_text())
-#         self.clip_len = clip_len
-#         self.size = size
-#         self.train = train
-
 class HGDClips(torch.utils.data.Dataset):
     def __init__(
         self,
@@ -84,22 +56,23 @@ class HGDClips(torch.utils.data.Dataset):
         size=(112,112),
         train=True,
         temporal_jitter=True,
-        random_flip=True,
-        brightness=0.0,
-        keep_classes=None,          # <-- NEW
+        rotate_angle=5.0,
+        # brightness=0.0,   <-- REMOVED
+        color_jitter=0.2,   # <-- NEW: Controls brightness, contrast, saturation
+        keep_classes=None,
     ):
         items = json.loads(Path(index_json).read_text())
 
-        # Optional class filtering + remap to compact indices 0..K-1
+        # Optional class filtering
         if keep_classes is not None:
             keep_classes = list(keep_classes)
             class_to_new = {cls: i for i, cls in enumerate(keep_classes)}
             filtered = []
             for it in items:
-                cls_id = it["class"]        # 1..27 from your index
+                cls_id = it["class"]
                 if cls_id in class_to_new:
-                    it = dict(it)           # copy so we don’t mutate original
-                    it["label"] = class_to_new[cls_id]  # 0..(K-1)
+                    it = dict(it)
+                    it["label"] = class_to_new[cls_id]
                     filtered.append(it)
             self.items = filtered
             self.keep_classes = keep_classes
@@ -111,10 +84,20 @@ class HGDClips(torch.utils.data.Dataset):
         self.size = size
         self.train = train
 
-        # enable augs only for train
         self.temporal_jitter = (temporal_jitter if train else False)
-        self.random_flip     = (random_flip     if train else False)
-        self.brightness      = (float(brightness) if train else 0.0)
+        self.rotate_angle    = (rotate_angle    if train else 0.0)
+        
+        # Initialize ColorJitter Object
+        # This doesn't apply the transform yet, it just sets the ranges
+        if train and color_jitter > 0:
+            self.jitter_tf = transforms.ColorJitter(
+                brightness=color_jitter, 
+                contrast=color_jitter, 
+                saturation=color_jitter, 
+                hue=0.1 # Keep hue shift small to avoid unrealistic colors
+            )
+        else:
+            self.jitter_tf = None
 
     def __len__(self): return len(self.items)
 
@@ -131,18 +114,39 @@ class HGDClips(torch.utils.data.Dataset):
 
         # Spatial resize
         if self.size is not None:
-            # video = F.interpolate(video, size=self.size, mode="bilinear", align_corners=False)
             video = resize_letterbox(video, target_size=self.size)
 
-        # Random horizontal flip
-        if self.random_flip and torch.rand(()) < 0.5:
-            video = torch.flip(video, dims=[3])  # flip W
+        # 1. Random Rotation (Consistent across frames)
+        if self.rotate_angle > 0:
+            angle = random.uniform(-self.rotate_angle, self.rotate_angle)
+            video = torch.stack([
+                TF.rotate(frame, angle, interpolation=TF.InterpolationMode.BILINEAR) 
+                for frame in video
+            ])
 
-        # Brightness jitter (multiply, then clamp to [0,1])
-        if self.brightness > 0.0:
-            lo, hi = 1.0 - self.brightness, 1.0 + self.brightness
-            factor = torch.empty(()).uniform_(lo, hi).item()
-            video = torch.clamp(video * factor, 0.0, 1.0)
+        # 2. Consistent Color Jitter (Consistent across frames)
+        if self.jitter_tf is not None:
+            # A. Sample the random parameters ONCE for this entire video clip
+            # fn_idx determines the order (e.g. brightness first, then contrast...)
+            fn_idx, b, c, s, h = transforms.ColorJitter.get_params(
+                self.jitter_tf.brightness, 
+                self.jitter_tf.contrast, 
+                self.jitter_tf.saturation, 
+                self.jitter_tf.hue
+            )
+
+            # B. Apply these exact parameters to every frame
+            jittered_frames = []
+            for frame in video:
+                # Iterate through the sampled order
+                for fn_id in fn_idx:
+                    if fn_id == 0: frame = TF.adjust_brightness(frame, b)
+                    elif fn_id == 1: frame = TF.adjust_contrast(frame, c)
+                    elif fn_id == 2: frame = TF.adjust_saturation(frame, s)
+                    elif fn_id == 3: frame = TF.adjust_hue(frame, h)
+                jittered_frames.append(frame)
+            
+            video = torch.stack(jittered_frames)
 
         # Temporal sampling -> fixed T
         idx = uniform_indices(video.shape[0], self.clip_len, jitter=self.temporal_jitter)
@@ -150,8 +154,6 @@ class HGDClips(torch.utils.data.Dataset):
         clip = clip.permute(1,0,2,3)           # (C,T,H,W)
 
         # Normalize
-        # mean = IMGNET_MEAN.to(dtype=clip.dtype, device=clip.device)
-        # std  = IMGNET_STD.to(dtype=clip.dtype, device=clip.device)
         mean = K400_MEAN.to(dtype=clip.dtype, device=clip.device)
         std  = K400_STD.to(dtype=clip.dtype, device=clip.device)
         clip = (clip - mean) / std
