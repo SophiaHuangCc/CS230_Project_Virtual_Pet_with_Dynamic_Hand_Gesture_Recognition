@@ -294,13 +294,13 @@ def run_one_epoch(model, loader, criterion, optimizer, device, train=True):
 
     pbar = tqdm(loader, desc="train" if train else "val", leave=False)
     for clips, labels in pbar:
-        if total_count == 0:
-            print(f"[debug] batch clips={tuple(clips.shape)} {clips.dtype}; labels={labels.dtype} range=[{labels.min().item()},{labels.max().item()}]")
+        # if total_count == 0:
+        #     print(f"[debug] batch clips={tuple(clips.shape)} {clips.dtype}; labels={labels.dtype} range=[{labels.min().item()},{labels.max().item()}]")
         clips = clips.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
-        if total_count == 0:
-            print("[DEBUG] shape of clips after to(device):", tuple(clips.shape))
-            print("[DEBUG] shape of labels after to(device):", tuple(labels.shape))
+        # if total_count == 0:
+        #     print("[DEBUG] shape of clips after to(device):", tuple(clips.shape))
+        #     print("[DEBUG] shape of labels after to(device):", tuple(labels.shape))
 
         if train:
             optimizer.zero_grad(set_to_none=True)
@@ -610,72 +610,79 @@ def main():
     # optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     best_val_acc = 0.0
+    best_epoch = 0
     start_time = time.time()
+    
     try:
         for epoch in range(1, args.epochs + 1):
             print(f"\nEpoch {epoch}/{args.epochs}")
             t0 = time.time()
-            train_loss, train_acc = run_one_epoch(model, train_loader, criterion, optimizer, device, train=True)
-            val_loss, val_acc     = run_one_epoch(model, val_loader,   criterion, optimizer, device, train=False)
+
+            # 1) Train for one epoch
+            train_loss, train_acc = run_one_epoch(
+                model, train_loader, criterion, optimizer, device, train=True
+            )
+
+            # 2) Full eval with metrics + artifacts on val set
+            val_acc, val_loss_exact, cm = evaluate_full(
+                model, val_loader, criterion, device,
+                num_classes=args.num_classes,
+                class_names=class_names,
+                save_dir=run_dir,
+                epoch=epoch,
+                max_bad=12,
+            )
+
             dt = time.time() - t0
+            print(
+                f"[epoch {epoch}] "
+                f"train_loss={train_loss:.4f}  train_acc={train_acc:.3f}  "
+                f"val_loss={val_loss_exact:.4f}  val_acc={val_acc:.3f}  "
+                f"time={dt:.1f}s"
+            )
 
-            # print(f"[epoch {epoch}] "
-            #       f"train_loss={train_loss:.4f}  train_acc={train_acc:.3f}  "
-            #       f"val_loss={val_loss:.4f}  val_acc={val_acc:.3f}  "
-            #       f"time={dt:.1f}s")
+            # 3) Append a one-line CSV log for THIS epoch (like YOLO)
+            with open(run_dir / "results.csv", "a") as f:
+                if epoch == 1 and f.tell() == 0:
+                    f.write(
+                        "epoch,train_loss,train_acc,"
+                        "val_loss,val_acc,"
+                        "precision_macro,recall_macro,f1_macro,iou_macro,"
+                        "time\n"
+                    )
+                # load the macro metrics we just wrote
+                mpath = run_dir / "metrics" / f"epoch_{epoch:03d}.json"
+                m = json.load(open(mpath))
+                f.write(
+                    f"{epoch},"
+                    f"{train_loss:.6f},{train_acc:.6f},"
+                    f"{m['loss']:.6f},{m['accuracy']:.6f},"
+                    f"{m['precision_macro']:.6f},"
+                    f"{m['recall_macro']:.6f},"
+                    f"{m['f1_macro']:.6f},"
+                    f"{m['iou_macro']:.6f},"
+                    f"{dt:.3f}\n"
+                )
 
-            # if val_acc > best_val_acc:
-            #     best_val_acc = val_acc
-            #     torch.save({
-            #         "epoch": epoch,
-            #         "model_state": model.state_dict(),
-            #         "optimizer_state": optimizer.state_dict(),
-            #         "val_acc": best_val_acc,
-            #         "args": vars(args),
-            #     }, args.save_path)
-            #     print(f"[info] ↑ new best val_acc={best_val_acc:.3f}; checkpoint saved to {args.save_path}")
-
-            print(f"[epoch {epoch}] "
-            f"train_loss={train_loss:.4f}  train_acc={train_acc:.3f}")
-
-        # Full eval with metrics + artifacts
-        val_logits_loss = nn.CrossEntropyLoss()
-        val_acc, val_loss_exact, cm = evaluate_full(
-            model, val_loader, criterion, device,
-            num_classes=args.num_classes,
-            class_names=class_names,
-            save_dir=run_dir,
-            epoch=epoch,
-            max_bad=12
-        )
-
-        dt = time.time() - t0
-        print(f"[epoch {epoch}] "
-            f"val_loss={val_loss_exact:.4f}  val_acc={val_acc:.3f}  "
-            f"time={dt:.1f}s")
-
-        # Append a one-line CSV log (like YOLO)
-        with open(run_dir / "results.csv", "a") as f:
-            if epoch == 1 and f.tell() == 0:
-                f.write("epoch,train_loss,train_acc,val_loss,val_acc,precision_macro,recall_macro,f1_macro,iou_macro,time\n")
-            # load the macro metrics we just wrote
-            mpath = run_dir / "metrics" / f"epoch_{epoch:03d}.json"
-            m = json.load(open(mpath))
-            f.write(f"{epoch},{train_loss:.6f},{train_acc:.6f},{m['loss']:.6f},{m['accuracy']:.6f},"
-                    f"{m['precision_macro']:.6f},{m['recall_macro']:.6f},{m['f1_macro']:.6f},{m['iou_macro']:.6f},{dt:.3f}\n")
-
-        # Save best weights under run_dir/weights
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            best_path = run_dir / "weights" / "best.pt"
-            torch.save({
-                "epoch": epoch,
-                "model_state": model.state_dict(),
-                "optimizer_state": optimizer.state_dict(),
-                "val_acc": best_val_acc,
-                "args": vars(args),
-            }, best_path)
-            print(f"[info] ↑ new best val_acc={best_val_acc:.3f}; saved to {best_path}")
+            # 4) Save best weights based on *validation accuracy* (YOLO-style)
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                best_epoch = epoch
+                best_path = run_dir / "weights" / "best.pt"
+                torch.save(
+                    {
+                        "epoch": epoch,
+                        "model_state": model.state_dict(),
+                        "optimizer_state": optimizer.state_dict(),
+                        "val_acc": best_val_acc,
+                        "args": vars(args),
+                    },
+                    best_path,
+                )
+                print(
+                    f"[info] ↑ new best at epoch {best_epoch} "
+                    f"val_acc={best_val_acc:.3f}; saved to {best_path}"
+                )
 
     except KeyboardInterrupt:
         print("\n[warn] Training interrupted by user (Ctrl+C).")
