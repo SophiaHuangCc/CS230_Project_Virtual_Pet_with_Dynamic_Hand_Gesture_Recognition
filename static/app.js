@@ -29,8 +29,8 @@ const GESTURE_ACTIONS = {
 // DOM elements
 const webcam = document.getElementById('webcam');
 const canvas = document.getElementById('canvas');
-const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
+const recordBtn = document.getElementById('recordBtn');
 const status = document.getElementById('status');
 const gestureInfo = document.getElementById('gestureInfo');
 const petAnimation = document.getElementById('petAnimation');
@@ -50,6 +50,9 @@ let currentGestureId = null;
 let currentGestureConfidence = null; // Store confidence for display during animation
 let animationInterval = null;
 let isAnimationPlaying = false; // Track if animation is currently playing
+let mediaRecorder = null;
+let isRecording = false;
+let recordedChunks = [];
 
 // Initialize gesture list
 function initGestureList() {
@@ -174,6 +177,7 @@ function loadAnimation(gestureId) {
     
     // Set flag to pause inference while animation plays (but don't update display yet)
     isAnimationPlaying = true;
+    recordBtn.disabled = true; // Disable recording while animation plays
     
     // Handle animation loaded and ready to play
     petAnimation.onloadeddata = () => {
@@ -200,6 +204,7 @@ function loadAnimation(gestureId) {
             petPlaceholder.classList.remove('hidden');
             petAnimation.classList.remove('show');
             isAnimationPlaying = false;
+            recordBtn.disabled = false; // Re-enable recording if play fails
             status.textContent = 'Camera active';
             updateActionDisplayForDetection();
         });
@@ -208,6 +213,7 @@ function loadAnimation(gestureId) {
     // Handle animation ended - resume gesture detection
     petAnimation.onended = () => {
         isAnimationPlaying = false;
+        recordBtn.disabled = false; // Re-enable recording after animation
         status.textContent = 'Camera active - Ready for next gesture';
         updateActionDisplayForDetection();
         // Clear the gesture info overlay after a short delay
@@ -222,6 +228,7 @@ function loadAnimation(gestureId) {
         petPlaceholder.classList.remove('hidden');
         petAnimation.classList.remove('show');
         isAnimationPlaying = false;
+        recordBtn.disabled = false; // Re-enable recording if animation fails
         status.textContent = 'Camera active';
         updateActionDisplayForDetection();
     };
@@ -241,45 +248,15 @@ function updateActionDisplayForDetection() {
     `;
 }
 
-// Start webcam capture
-async function startCapture() {
-    try {
-        status.textContent = 'Requesting camera access...';
-        
-        stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-                width: { ideal: 640 },
-                height: { ideal: 480 },
-                facingMode: 'user'
-            }
-        });
-
-        webcam.srcObject = stream;
-        isCapturing = true;
-        frameBuffer = [];
-        lastInferenceTime = 0;
-
-        startBtn.disabled = true;
-        stopBtn.disabled = false;
-        status.textContent = 'Camera active';
-        updateActionDisplayForDetection();
-
-        // Start frame capture loop
-        animationInterval = setInterval(() => {
-            addFrameToBuffer();
-            predictGesture();
-        }, FRAME_INTERVAL);
-
-    } catch (error) {
-        console.error('Error accessing camera:', error);
-        status.textContent = `Camera error: ${error.message}`;
-        alert('Could not access camera. Please allow camera permissions and try again.');
-    }
-}
-
 // Stop webcam capture
 function stopCapture() {
     isCapturing = false;
+
+    // Stop any ongoing recording
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+    }
+    isRecording = false;
 
     if (stream) {
         stream.getTracks().forEach(track => track.stop());
@@ -297,8 +274,8 @@ function stopCapture() {
     currentGestureConfidence = null;
     isAnimationPlaying = false; // Reset animation state
 
-    startBtn.disabled = false;
     stopBtn.disabled = true;
+    recordBtn.disabled = false;
     status.textContent = 'Camera stopped';
     gestureInfo.classList.remove('show');
     predictionInfo.innerHTML = '';
@@ -341,9 +318,199 @@ async function checkBackendHealth() {
     }
 }
 
+// Extract frames from video blob
+async function extractFramesFromVideo(videoBlob) {
+    return new Promise((resolve, reject) => {
+        const video = document.createElement('video');
+        const url = URL.createObjectURL(videoBlob);
+        video.src = url;
+        video.muted = true;
+        
+        video.onloadedmetadata = () => {
+            video.currentTime = 0;
+            const frames = [];
+            const duration = video.duration;
+            const frameInterval = duration / CLIP_LEN; // Extract 16 frames evenly spaced
+            
+            let frameIndex = 0;
+            
+            const captureFrame = () => {
+                if (frameIndex >= CLIP_LEN) {
+                    URL.revokeObjectURL(url);
+                    resolve(frames);
+                    return;
+                }
+                
+                // Set video time to capture frame at this position
+                video.currentTime = frameIndex * frameInterval;
+                
+                video.onseeked = () => {
+                    // Draw frame to canvas
+                    const ctx = canvas.getContext('2d');
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    ctx.drawImage(video, 0, 0);
+                    
+                    // Convert to base64
+                    const base64Frame = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+                    frames.push(base64Frame);
+                    
+                    frameIndex++;
+                    captureFrame();
+                };
+            };
+            
+            captureFrame();
+        };
+        
+        video.onerror = (error) => {
+            URL.revokeObjectURL(url);
+            reject(error);
+        };
+    });
+}
+
+// Record 4-second video and predict gesture
+async function recordAndPredict() {
+    if (isRecording || isAnimationPlaying) {
+        return;
+    }
+    
+    try {
+        // Start camera if not already started
+        if (!stream) {
+            status.textContent = 'Requesting camera access...';
+            recordBtn.disabled = true;
+            
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        facingMode: 'user'
+                    }
+                });
+                
+                webcam.srcObject = stream;
+                isCapturing = true;
+                stopBtn.disabled = false;
+                status.textContent = 'Camera started. Ready to record...';
+            } catch (error) {
+                console.error('Error accessing camera:', error);
+                status.textContent = `Camera error: ${error.message}`;
+                recordBtn.disabled = false;
+                alert('Could not access camera. Please allow camera permissions and try again.');
+                return;
+            }
+        }
+        
+        // Now start recording
+        isRecording = true;
+        recordBtn.disabled = true;
+        recordBtn.textContent = 'Recording...';
+        status.textContent = 'Recording 4 seconds...';
+        
+        // Pause continuous detection during recording (if it was running)
+        if (animationInterval) {
+            clearInterval(animationInterval);
+            animationInterval = null;
+        }
+        
+        // Create MediaRecorder
+        recordedChunks = [];
+        const options = { mimeType: 'video/webm;codecs=vp9' };
+        
+        // Try different codecs if vp9 is not supported
+        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+            options.mimeType = 'video/webm;codecs=vp8';
+            if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                options.mimeType = 'video/webm';
+            }
+        }
+        
+        mediaRecorder = new MediaRecorder(stream, options);
+        
+        mediaRecorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+                recordedChunks.push(event.data);
+            }
+        };
+        
+        mediaRecorder.onstop = async () => {
+            try {
+                status.textContent = 'Processing video...';
+                
+                // Create blob from recorded chunks
+                const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                
+                // Extract frames from video
+                const frames = await extractFramesFromVideo(blob);
+                
+                if (frames.length !== CLIP_LEN) {
+                    throw new Error(`Expected ${CLIP_LEN} frames, got ${frames.length}`);
+                }
+                
+                // Send to backend for prediction
+                status.textContent = 'Predicting gesture...';
+                
+                const response = await fetch('/predict', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        frames: frames
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                handlePrediction(result);
+                
+            } catch (error) {
+                console.error('Recording/prediction error:', error);
+                status.textContent = `Error: ${error.message}`;
+                alert(`Error processing recording: ${error.message}`);
+            } finally {
+                isRecording = false;
+                recordBtn.disabled = false;
+                recordBtn.textContent = 'Record (4s)';
+                
+                // Resume continuous detection if camera is still active
+                if (isCapturing && !isAnimationPlaying) {
+                    animationInterval = setInterval(() => {
+                        addFrameToBuffer();
+                        predictGesture();
+                    }, FRAME_INTERVAL);
+                }
+            }
+        };
+        
+        // Start recording
+        mediaRecorder.start();
+        
+        // Stop recording after 4 seconds
+        setTimeout(() => {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+        }, 4000);
+        
+    } catch (error) {
+        console.error('Recording error:', error);
+        status.textContent = `Recording error: ${error.message}`;
+        isRecording = false;
+        recordBtn.disabled = false;
+        recordBtn.textContent = 'Record (4s)';
+    }
+}
+
 // Event listeners
-startBtn.addEventListener('click', startCapture);
 stopBtn.addEventListener('click', stopCapture);
+recordBtn.addEventListener('click', recordAndPredict);
 
 // Initialize on page load
 window.addEventListener('load', () => {
