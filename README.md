@@ -158,6 +158,7 @@ python train.py --pretrained --epochs 40 --batch_size 16 --clip_len 16 --resize 
 ```
 
 The trained model checkpoint will be saved in `runs/train/exp*/weights/best.pt`.
+Our best trained model checkpoint: https://drive.google.com/drive/folders/13AZluH-Pg8uqmd_ZtjL-xWmA2dyO5Ex6?usp=sharing
 
 ---
 

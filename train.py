@@ -1,14 +1,4 @@
-#!/usr/bin/env python3
-"""
-train.py — CPU-friendly training script for HGD
-
-- Uses dataset_hgd_preproc.HGDClips (on-the-fly video decode, resize, normalize)
-- Random 80/20 train/val split (reproducible with --seed)
-- Prints epoch loss/accuracy; saves best checkpoint as best.pt
-"""
-
 import argparse
-import os
 import time
 import math
 import random
@@ -21,61 +11,17 @@ from torch.utils.data import DataLoader, Subset, random_split
 from tqdm import tqdm
 from torchvision.models.video import r3d_18, r2plus1d_18
 from torchvision.models.video import R3D_18_Weights, R2Plus1D_18_Weights
-import torch.nn.functional as F
 
 import json
 import numpy as np
-import datetime as _dt
-from collections import defaultdict
 import matplotlib.pyplot as plt
 import torchvision.utils as vutils
 
 from dataset_hgd_preproc import HGDClips
 
-
-# ------------------------------
-# Tiny 3D CNN (CPU-friendly)
-# ------------------------------
-class Tiny3DCNN(nn.Module):
-    def __init__(self, num_classes: int = 27, in_ch: int = 3):
-        super().__init__()
-        # Downsample using stride in convs + AvgPool3d (MPS-friendly)
-        self.features = nn.Sequential(
-            # block 1
-            nn.Conv3d(in_ch, 32, kernel_size=3, stride=(1,2,2), padding=1),  # spatial /2
-            nn.BatchNorm3d(32),
-            nn.ReLU(inplace=True),
-            nn.AvgPool3d((1,2,2)),  # spatial /2 again (total /4)
-
-            # block 2
-            nn.Conv3d(32, 64, kernel_size=3, stride=(2,1,1), padding=1),     # temporal /2
-            nn.BatchNorm3d(64),
-            nn.ReLU(inplace=True),
-            nn.AvgPool3d((1,2,2)),  # spatial /2 (total /8 vs input)
-
-            # block 3
-            nn.Conv3d(64, 128, kernel_size=3, stride=(2,1,1), padding=1),    # temporal /2 again
-            nn.BatchNorm3d(128),
-            nn.ReLU(inplace=True),
-            nn.AvgPool3d((1,2,2)),  # spatial /2 again
-        )
-        self.head = nn.Sequential(
-            nn.AdaptiveAvgPool3d(1),   # (B,128,1,1,1)
-            nn.Flatten(),              # (B,128)
-            nn.Dropout(p=0.2),
-            nn.Linear(128, num_classes)
-        )
-
-    def forward(self, x):
-        x = self.features(x)
-        x = self.head(x)
-        return x
-    
-
 # ------------------------------
 # Transfer Learning with r3d_18
-# ------------------------------
-    
+# ------------------------------   
 def TransferModel_1(arch, num_classes, pretrained=False, dropout=0.5):
     if arch == "r3d_18":
         weights = R3D_18_Weights.KINETICS400_V1 if pretrained else None
@@ -292,13 +238,8 @@ def run_one_epoch(model, loader, criterion, optimizer, device, train=True):
 
     pbar = tqdm(loader, desc="train" if train else "val", leave=False)
     for clips, labels in pbar:
-        # if total_count == 0:
-        #     print(f"[debug] batch clips={tuple(clips.shape)} {clips.dtype}; labels={labels.dtype} range=[{labels.min().item()},{labels.max().item()}]")
         clips = clips.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
-        # if total_count == 0:
-        #     print("[DEBUG] shape of clips after to(device):", tuple(clips.shape))
-        #     print("[DEBUG] shape of labels after to(device):", tuple(labels.shape))
 
         if train:
             optimizer.zero_grad(set_to_none=True)
@@ -346,7 +287,7 @@ def _collect_logits_labels(model, loader, device):
     for clips, labels in loader:
         clips = clips.to(device, non_blocking=True)
         # keep labels on CPU and long
-        labels = labels.long()                     # <— IMPORTANT
+        labels = labels.long() 
         logits = model(clips)
         all_logits.append(logits.detach().cpu())
         all_labels.append(labels.detach().cpu())
@@ -448,14 +389,6 @@ def evaluate_full(model, loader, criterion, device, num_classes, class_names, sa
     _plot_confmat(cm, class_names or [str(i) for i in range(num_classes)],
                   save_dir / f"confmat_epoch_{epoch:03d}.png")
 
-    # Qualitative: save a few wrong predictions
-    # wrong_idx = (preds != labels).nonzero(as_tuple=False).flatten().tolist()
-    # (save_dir / "qual").mkdir(exist_ok=True)
-    # for k, idx in enumerate(wrong_idx[:max_bad]):
-    #     grid = _clip_contact_sheet(clips[idx].cpu())  # (C,H,W*)
-    #     vutils.save_image(grid, save_dir / "qual" / f"wrong_{epoch:03d}_{k:03d}_t{int(labels[idx])}_p{int(preds[idx])}.png")
-    # return acc, loss, cm
-    # Qualitative: save a few wrong predictions
     wrong_idx = (preds != labels).nonzero(as_tuple=False).flatten().tolist()
     (save_dir / "qual").mkdir(exist_ok=True)
 
@@ -476,7 +409,7 @@ def evaluate_full(model, loader, criterion, device, num_classes, class_names, sa
 # Main
 # ------------------------------
 def main():
-    parser = argparse.ArgumentParser(description="Train a tiny 3D CNN on HGD (CPU-friendly).")
+    parser = argparse.ArgumentParser(description="Train hand gesture classification model.")
     parser.add_argument("--index", type=str, default="hgd_index.json", help="Path to index JSON built from CSV.")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=4)
@@ -490,10 +423,9 @@ def main():
     parser.add_argument("--force_cpu", action="store_true", help="Force CPU even if MPS/GPU is available.")
     parser.add_argument("--use_gpu", action="store_true", help="Use CUDA GPU if available.")
     parser.add_argument("--save_path", type=str, default="best.pt")
-    # add to argparse
     parser.add_argument("--flip_prob", type=float, default=0.5)
     parser.add_argument("--temporal_jitter", type=int, default=2)
-    parser.add_argument("--brightness", type=float, default=0.2)  # ±20%
+    parser.add_argument("--brightness", type=float, default=0.2)
     parser.add_argument("--arch", type=str, default="r3d_18",
                     choices=["r3d_18", "r2plus1d_18", "i3d"],
                     help="Backbone architecture")
@@ -515,27 +447,13 @@ def main():
 
     args = parser.parse_args()
 
-    # --- define the 10 classes we care about ---
+    # Define the 10 classes we care about
     KEEP_CLASSES = [10, 11, 16, 17, 18, 23, 24, 25, 26, 27]
     args.num_classes = len(KEEP_CLASSES)  # 10
 
     set_seed(args.seed)
     device = get_device(force_cpu=args.force_cpu, use_gpu=args.use_gpu)
     print(f"[info] device: {device}")
-
-    # Logging setup
-    # run_dir = _next_run_dir("runs/train")
-    # (run_dir / "weights").mkdir(parents=True, exist_ok=True)
-    # (run_dir / "metrics").mkdir(exist_ok=True)
-    # (run_dir / "qual").mkdir(exist_ok=True)
-    # json.dump(vars(args), open(run_dir / "hparams.json", "w"), indent=2)
-    # print(f"[info] logging to: {run_dir}")
-    # class_names = [f"c{i}" for i in range(args.num_classes)]
-
-    # Dataset instances: one with train=True (augs on), one with train=False (no augs)
-    # size = (args.resize, args.resize)
-    # full_train_ds = HGDClips(args.index, clip_len=args.clip_len, size=size, train=True)
-    # full_eval_ds  = HGDClips(args.index, clip_len=args.clip_len, size=size, train=False)
 
     # Logging setup: 10 classes
     run_dir = _next_run_dir("runs/train")
@@ -556,14 +474,14 @@ def main():
         clip_len=args.clip_len,
         size=size,
         train=True,
-        keep_classes=KEEP_CLASSES,     # <-- NEW
+        keep_classes=KEEP_CLASSES,
     )
     full_eval_ds  = HGDClips(
         args.index,
         clip_len=args.clip_len,
         size=size,
         train=False,
-        keep_classes=KEEP_CLASSES,     # <-- NEW
+        keep_classes=KEEP_CLASSES,
     )
 
     # Split indices reproducibly
@@ -588,24 +506,20 @@ def main():
         num_workers=args.num_workers, pin_memory=False
     )
 
-    # Model / loss / opt
-    # Tiny3DCNN
-    # model = model = Tiny3DCNN(num_classes=27).to(device)
-    # Transfer Learning （exp13 pretrained r3d_18=0.343)
-    model, weights = TransferModel_1(args.arch, args.num_classes, args.pretrained, args.dropout)
+
     # Freeze more (strongest freeze)
-    freeze_until(model, stage="layer3")  # freezes stem, layer1, layer2, layer3
-    criterion = nn.CrossEntropyLoss()
-    optimizer = make_optimizer(model, base_lr=args.lr, weight_decay=args.weight_decay, unfreeze_last=False)
-    model = model.to(device)
-    # Baseline ResNet
-    # model = ResNet3D(block="r3d", layers=(2,2,2,2), num_classes=27).to(device)
-    # criterion = nn.CrossEntropyLoss()
-    # optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    # 10 classes
-    # model = ResNet3D(block="r3d", layers=(2,2,2,2), num_classes=args.num_classes).to(device)
-    # criterion = nn.CrossEntropyLoss()
-    # optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    if args.pretrained:
+        # Pretrained 
+        model, weights = TransferModel_1(args.arch, args.num_classes, args.pretrained, args.dropout)
+        freeze_until(model, stage="layer3")  # freezes stem, layer1, layer2, layer3
+        criterion = nn.CrossEntropyLoss()
+        optimizer = make_optimizer(model, base_lr=args.lr, weight_decay=args.weight_decay, unfreeze_last=False)
+        model = model.to(device)
+    else:
+        # Baseline ResNet(10 classes)
+        model = ResNet3D(block="r3d", layers=(2,2,2,2), num_classes=args.num_classes).to(device)
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     best_val_acc = 0.0
     best_epoch = 0
@@ -616,12 +530,12 @@ def main():
             print(f"\nEpoch {epoch}/{args.epochs}")
             t0 = time.time()
 
-            # 1) Train for one epoch
+            # Train for one epoch
             train_loss, train_acc = run_one_epoch(
                 model, train_loader, criterion, optimizer, device, train=True
             )
 
-            # 2) Full eval with metrics + artifacts on val set
+            # Full eval with metrics + artifacts on val set
             val_acc, val_loss_exact, cm = evaluate_full(
                 model, val_loader, criterion, device,
                 num_classes=args.num_classes,
@@ -639,7 +553,7 @@ def main():
                 f"time={dt:.1f}s"
             )
 
-            # 3) Append a one-line CSV log for THIS epoch (like YOLO)
+            # Append a one-line CSV log for THIS epoch (like YOLO)
             with open(run_dir / "results.csv", "a") as f:
                 if epoch == 1 and f.tell() == 0:
                     f.write(
@@ -648,7 +562,7 @@ def main():
                         "precision_macro,recall_macro,f1_macro,iou_macro,"
                         "time\n"
                     )
-                # load the macro metrics we just wrote
+                # Load the macro metrics we just wrote
                 mpath = run_dir / "metrics" / f"epoch_{epoch:03d}.json"
                 m = json.load(open(mpath))
                 f.write(
@@ -662,7 +576,7 @@ def main():
                     f"{dt:.3f}\n"
                 )
 
-            # 4) Save best weights based on *validation accuracy* (YOLO-style)
+            # Save best weights based on validation accuracy (YOLO-style)
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
                 best_epoch = epoch
