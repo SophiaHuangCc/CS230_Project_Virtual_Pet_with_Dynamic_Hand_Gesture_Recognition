@@ -4,7 +4,7 @@ import random
 from pathlib import Path
 from torchvision.io import read_video
 import torchvision.transforms.functional as TF 
-from torchvision import transforms # <--- Added for ColorJitter
+from torchvision import transforms
 import torch.nn.functional as F
 
 K400_MEAN = torch.tensor([0.43216, 0.394666, 0.37645]).view(3,1,1,1)
@@ -12,7 +12,6 @@ K400_STD  = torch.tensor([0.22803, 0.22145, 0.216989]).view(3,1,1,1)
 FPS = 30.0
 
 def resize_letterbox(video, target_size=(112,112)):
-    # ... (Same helper function) ...
     is_CT = video.shape[0] == 3
     if is_CT: video = video.permute(1,0,2,3)
     T, C, H, W = video.shape
@@ -31,7 +30,6 @@ def resize_letterbox(video, target_size=(112,112)):
     return video
 
 def uniform_indices(n_src, n_out, jitter=False):
-    # ... (Same helper function) ...
     if n_src <= 0: raise ValueError("Empty decoded segment")
     if n_src <= n_out:
         idx = list(range(n_src)) + [n_src-1] * (n_out - n_src)
@@ -57,8 +55,7 @@ class HGDClips(torch.utils.data.Dataset):
         train=True,
         temporal_jitter=True,
         rotate_angle=5.0,
-        # brightness=0.0,   <-- REMOVED
-        color_jitter=0.2,   # <-- NEW: Controls brightness, contrast, saturation
+        color_jitter=0.2,   # Controls brightness, contrast, saturation
         keep_classes=None,
     ):
         items = json.loads(Path(index_json).read_text())
@@ -116,7 +113,7 @@ class HGDClips(torch.utils.data.Dataset):
         if self.size is not None:
             video = resize_letterbox(video, target_size=self.size)
 
-        # 1. Random Rotation (Consistent across frames)
+        # Random Rotation (Consistent across frames)
         if self.rotate_angle > 0:
             angle = random.uniform(-self.rotate_angle, self.rotate_angle)
             video = torch.stack([
@@ -124,10 +121,8 @@ class HGDClips(torch.utils.data.Dataset):
                 for frame in video
             ])
 
-        # 2. Consistent Color Jitter (Consistent across frames)
+        # Consistent Color Jitter (Consistent across frames)
         if self.jitter_tf is not None:
-            # A. Sample the random parameters ONCE for this entire video clip
-            # fn_idx determines the order (e.g. brightness first, then contrast...)
             fn_idx, b, c, s, h = transforms.ColorJitter.get_params(
                 self.jitter_tf.brightness, 
                 self.jitter_tf.contrast, 
@@ -135,10 +130,8 @@ class HGDClips(torch.utils.data.Dataset):
                 self.jitter_tf.hue
             )
 
-            # B. Apply these exact parameters to every frame
             jittered_frames = []
             for frame in video:
-                # Iterate through the sampled order
                 for fn_id in fn_idx:
                     if fn_id == 0: frame = TF.adjust_brightness(frame, b)
                     elif fn_id == 1: frame = TF.adjust_contrast(frame, c)

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-train.py — minimal CPU-friendly training script for HGD
+train.py — CPU-friendly training script for HGD
 
 - Uses dataset_hgd_preproc.HGDClips (on-the-fly video decode, resize, normalize)
-- Builds a small 3D CNN (much lighter than R3D-18 for CPU dev)
 - Random 80/20 train/val split (reproducible with --seed)
 - Prints epoch loss/accuracy; saves best checkpoint as best.pt
 """
@@ -31,7 +30,6 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import torchvision.utils as vutils
 
-# ---- import your dataset class ----
 from dataset_hgd_preproc import HGDClips
 
 
